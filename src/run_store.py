@@ -35,6 +35,8 @@ class RunMetadata:
     mode: str  # "full" | "partial"
     status: str  # "pending" | "scraping" | "complete" | "failed"
     years_available: list[int] = field(default_factory=list)
+    decisions: dict[str, dict] | None = None  # keyed by "d0", "d1", etc.
+    # DEPRECATED: old flat 'decision' field, kept for backward compat loading
     decision: dict | None = None
     parent_run_id: str | None = None
     error: str | None = None
@@ -73,7 +75,6 @@ def next_run_id() -> str:
 
 
 def create_run(
-    decision: dict | None = None,
     mode: str = "full",
     years_available: list[int] | None = None,
 ) -> RunMetadata:
@@ -88,7 +89,6 @@ def create_run(
         mode=mode,
         status="pending",
         years_available=years_available or [],
-        decision=decision,
     )
     _write_metadata(meta)
     return meta
@@ -128,12 +128,29 @@ def list_runs() -> list[RunMetadata]:
     return result
 
 
-def append_history(run_id: str, decision: dict, outcomes: dict) -> None:
-    """Append a (decision, outcomes) entry to the history log."""
+def append_history(
+    run_id: str,
+    decision: dict,
+    outcomes: dict,
+    decision_index: int | None = None,
+    source_year: int | None = None,
+    outcome_year: int | None = None,
+) -> None:
+    """Append a (decision, outcomes) entry to the history log.
+
+    Args:
+        decision_index: Which decision this is (0 or 1). DecisionN is made
+            while viewing YearN and produces YearN+1.
+        source_year: The year whose state informed this decision (= decision_index).
+        outcome_year: The year whose results reflect this decision (= decision_index + 1).
+    """
     _runs_dir().mkdir(parents=True, exist_ok=True)
     entry = {
         "run_id": run_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "decision_index": decision_index,
+        "source_year": source_year,
+        "outcome_year": outcome_year,
         "decision": decision,
         "outcomes": outcomes,
     }

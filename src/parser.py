@@ -768,7 +768,10 @@ def parse_performance_summary(year: int) -> PerformanceSummary | None:
         if not label:
             continue
         ll = str(label).lower()
+        # Skip note/legend rows (no numeric value in col F)
         val = _float(_cell(ws, r, 6))
+        if "note" in ll or val is None:
+            continue
         if "total mfr" in ll or "manufacturer sales" in ll:
             ps.industry_total_mfr_sales = val
         elif "unit sales" in ll:
@@ -903,21 +906,24 @@ def parse_product_contribution(year: int) -> list[ProductContribution]:
             if not label:
                 continue
             ll = str(label).lower().strip()
+            # Skip note/legend rows
+            if ll.startswith("note"):
+                continue
             # Try col C (total) first, then B
             val = _float(_cell(ws, r, 3))
             if val is None:
                 val = _float(_cell(ws, r, 2))
 
             if is_per_unit:
-                if "avg retail" in ll:
+                if "avg" in ll and "retail" in ll:
                     target.per_unit_avg_retail_price = val
                 elif "retail sales" in ll:
                     target.per_unit_retail_sales = val
-                elif "mfr sales" in ll:
+                elif "manufacturer" in ll and "sales" in ll or "mfr sales" in ll:
                     target.per_unit_manufacturer_sales = val
                 elif "allowance" in ll:
                     target.per_unit_allowance_expense = val
-                elif "cogs" in ll:
+                elif "cost of goods" in ll or "cogs" in ll:
                     target.per_unit_cogs = val
                 elif "gross margin" in ll:
                     target.per_unit_gross_margin = val
@@ -932,15 +938,15 @@ def parse_product_contribution(year: int) -> list[ProductContribution]:
             else:
                 if "unit sales" in ll:
                     target.unit_sales = val
-                elif "avg retail" in ll:
+                elif "avg" in ll and "retail" in ll:
                     target.avg_retail_price = val
                 elif "retail sales" in ll:
                     target.retail_sales = val
-                elif "mfr sales" in ll:
+                elif "manufacturer" in ll and "sales" in ll or "mfr sales" in ll:
                     target.manufacturer_sales = val
                 elif "allowance" in ll:
                     target.allowance_expense = val
-                elif "cogs" in ll:
+                elif "cost of goods" in ll or "cogs" in ll:
                     target.cost_of_goods_sold = val
                 elif "gross margin" in ll:
                     target.gross_margin = val
@@ -1001,24 +1007,28 @@ def parse_sales_report(year: int) -> dict[str, BrandSalesReport]:
 
         # Parse discount schedule section
         if discount_start:
-            tier_map = {
-                "<250": "direct_under_250",
-                "<2500": "direct_under_2500",
-                "2500+": "direct_2500_plus",
-            }
+            # Order matters: check longer keys first to avoid "<250" matching "<2500"
+            tier_list = [
+                ("<2500", "direct_under_2500"),
+                ("2500+", "direct_2500_plus"),
+                ("<250", "direct_under_250"),
+            ]
             for r in range(discount_start + 1, (channel_start or ws.max_row) + 1):
                 label = _cell(ws, r, 1)
                 if not label:
                     continue
                 ls = str(label).strip()
-                for key, attr in tier_map.items():
-                    if key in ls:
+                # Normalize spaces for matching (e.g., "< 250" -> "<250")
+                ls_no_space = ls.replace(" ", "")
+                for key, attr in tier_list:
+                    if key in ls_no_space:
                         setattr(sr, attr, DiscountTierSales(
                             price=_float(_cell(ws, r, 2)),
                             units=_float(_cell(ws, r, 3)),
                             dollars=_float(_cell(ws, r, 4)),
                             pct_of_total=_float(_cell(ws, r, 5)),
                         ))
+                        break
                 if "wholesale" in ls.lower() or "indirect" in ls.lower():
                     sr.indirect_wholesale = DiscountTierSales(
                         price=_float(_cell(ws, r, 2)),
@@ -1068,38 +1078,52 @@ def parse_promotion_report(year: int) -> dict[str, BrandPromotionReport]:
         pr = BrandPromotionReport(brand=brand)
 
         for r in range(1, ws.max_row + 1):
-            label = _cell(ws, r, 1)
-            if not label:
-                continue
-            ll = str(label).lower()
-            val = _float(_cell(ws, r, 2))
-            if val is None:
-                val = _float(_cell(ws, r, 3))
+            # Check left column (C1=label, C2=value)
+            label_left = _cell(ws, r, 1)
+            val_left = _cell(ws, r, 2)
+            # Check right column (C4=label, C5=value)
+            label_right = _cell(ws, r, 4)
+            val_right = _cell(ws, r, 5)
 
-            if "promo allowance" in ll:
-                pr.promotional_allowance = val
-            elif "co-op" in ll:
-                pr.coop_advertising = val
-            elif "pop" in ll or "point of purchase" in ll:
-                pr.point_of_purchase = val
-            elif "trial" in ll:
-                pr.trial_size = val
-            elif "expir" in ll:
-                pr.coupon_expiration_months = val
-            elif "coupon amount" in ll:
-                pr.coupon_amount = val
-            elif "trade rating" in ll:
-                pr.trade_rating = val
-            elif "participating" in ll:
-                pr.pct_participating_retailers = val
-            elif "mailed" in ll:
-                pr.coupons_mailed_thousands = val
-            elif "conversion" in ll:
-                pr.coupon_conversions = val
-            elif "redeemed" in ll:
-                pr.coupons_redeemed = val
-            elif "% of total" in ll:
-                pr.promo_pct_of_total_sales = val
+            if label_left:
+                ll = str(label_left).lower()
+                vl = _float(val_left)
+                if "promo" in ll and "allow" in ll:
+                    pr.promotional_allowance = vl
+                elif "co-op" in ll or "coop" in ll:
+                    pr.coop_advertising = vl
+                elif "point of purchase" in ll or "pop" in ll:
+                    pr.point_of_purchase = vl
+                elif "trial" in ll:
+                    pr.trial_size = vl
+                elif "coupon exp" in ll:
+                    pr.coupon_expiration_months = vl
+                elif "coupon amount" in ll:
+                    # Value may be string like "$0.50"
+                    if val_left:
+                        from src.dom_scraper import parse_num
+                        pr.coupon_amount = parse_num(str(val_left))
+
+            if label_right:
+                lr = str(label_right).lower()
+                vr = _float(val_right)
+                if "trade rating" in lr:
+                    pr.trade_rating = vr
+                elif "participating" in lr:
+                    pr.pct_participating_retailers = vr
+                elif "mailed" in lr:
+                    pr.coupons_mailed_thousands = vr
+                elif "conversion" in lr:
+                    pr.coupon_conversions = vr
+                elif "redeemed" in lr:
+                    pr.coupons_redeemed = vr
+                elif "% of total" in lr:
+                    pr.promo_pct_of_total_sales = vr
+
+            # Handle R6 which has no C1 label — Co-op Advertising row
+            # It's the row after Promotion Allowance with a value in C2
+            if not label_left and val_left is not None and pr.promotional_allowance is not None and pr.coop_advertising is None:
+                pr.coop_advertising = _float(val_left)
 
         results[brand] = pr
     wb.close()
@@ -1230,6 +1254,9 @@ def parse_symptoms_reported(year: int) -> SymptomsReported | None:
         if not label:
             continue
         ll = str(label).lower()
+        # Skip note/legend rows (long text or no numeric value)
+        if len(ll) > 50 or _float(_cell(ws, r, 2)) is None:
+            continue
         for key, attr in symptom_map.items():
             if key in ll:
                 setattr(sr, attr, _float(_cell(ws, r, 2)))
@@ -1504,13 +1531,18 @@ def parse_promotion(year: int) -> dict[str, BrandPromotion]:
         brand = str(brand).strip()
         if "note" in brand.lower() or "dollar" in brand.lower():
             continue
+        # Coupon amount may be "$0.50" string — strip $ for parsing
+        coupon_raw = _cell(ws, r, 6)
+        coupon_val = _float(coupon_raw)
+        if coupon_val is None and coupon_raw:
+            coupon_val = _float(str(coupon_raw).replace("$", ""))
         bp = BrandPromotion(
             brand=brand,
             promotional_allowance_pct=_float(_cell(ws, r, 2)),
             coop_advertising=_float(_cell(ws, r, 3)),
             point_of_purchase=_float(_cell(ws, r, 4)),
             trial_size=str(_cell(ws, r, 5) or ""),
-            coupon_amount=_float(_cell(ws, r, 6)),
+            coupon_amount=coupon_val,
             trade_rating=_float(_cell(ws, r, 7)),
         )
         results[brand] = bp
@@ -1693,7 +1725,7 @@ def parse_sales_force(year: int) -> dict[str, CompanySalesForce]:
                         csf.total_direct = val
                     elif "total indirect" in ll:
                         csf.total_indirect = val
-                    elif "total" in ll and "sf" in ll:
+                    elif "total" in ll and ("sf" in ll or "sales force" in ll):
                         csf.total_sales_force = val
 
     wb.close()
@@ -1794,9 +1826,12 @@ def parse_decision_criteria(year: int) -> DecisionCriteria | None:
         ll = str(label).lower()
 
         if "penetration" in ll:
-            dc.market_penetration_pct = _float(_cell(ws, r, 2))
+            # Value may be in col B or C
+            v = _float(_cell(ws, r, 2))
+            dc.market_penetration_pct = v if v is not None else _float(_cell(ws, r, 3))
         elif "purchase" in ll and "year" in ll:
-            dc.avg_purchase_per_year = _float(_cell(ws, r, 2))
+            v = _float(_cell(ws, r, 2))
+            dc.avg_purchase_per_year = v if v is not None else _float(_cell(ws, r, 3))
         else:
             for key, attr in criteria_map.items():
                 if key in ll:
@@ -1875,11 +1910,14 @@ def parse_operating_statistics(year: int) -> dict[str, CompanyOperatingStats]:
     ]
 
     row_fields_pct_retail = [
+        ("manufacturer sales", "pct_retail_manufacturer_sales"),
         ("mfr sales", "pct_retail_manufacturer_sales"),
-        ("promo allowance", "pct_retail_promo_allowance"),
+        ("cost of goods", "pct_retail_cogs"),
         ("cogs", "pct_retail_cogs"),
         ("gross margin", "pct_retail_gross_margin"),
+        ("cons.", "pct_retail_consumer_trade_promo"),
         ("consumer", "pct_retail_consumer_trade_promo"),
+        ("promo", "pct_retail_promo_allowance"),
         ("advertising", "pct_retail_advertising"),
         ("sales force", "pct_retail_sales_force"),
         ("admin", "pct_retail_admin"),
@@ -1889,10 +1927,12 @@ def parse_operating_statistics(year: int) -> dict[str, CompanyOperatingStats]:
     ]
 
     row_fields_pct_mfr = [
-        ("promo allowance", "pct_mfr_promo_allowance"),
+        ("cost of goods", "pct_mfr_cogs"),
         ("cogs", "pct_mfr_cogs"),
         ("gross margin", "pct_mfr_gross_margin"),
+        ("cons.", "pct_mfr_consumer_trade_promo"),
         ("consumer", "pct_mfr_consumer_trade_promo"),
+        ("promo", "pct_mfr_promo_allowance"),
         ("advertising", "pct_mfr_advertising"),
         ("sales force", "pct_mfr_sales_force"),
         ("admin", "pct_mfr_admin"),
@@ -2177,22 +2217,55 @@ def parse_shopping_habits(year: int) -> ShoppingHabits | None:
 
 
 def parse_trade_offs(year: int) -> dict[str, BrandTradeOff]:
-    raw = _parse_brand_survey(year, "Trade_Offs",
-        ["MSRP", "Perceived Price", "Perceived Effect", "Purchased"])
+    wb = _open(year, "Trade_Offs")
+    if wb is None:
+        return {}
+    ws = wb.active
     results = {}
-    for brand, data in raw.items():
+
+    # Find header row (contains "Perceived" or "Purchased")
+    header_row = None
+    for r in range(1, min(10, ws.max_row + 1)):
+        for c in range(2, ws.max_column + 1):
+            v = _cell(ws, r, c)
+            if v and ("perceived" in str(v).lower() or "purchased" in str(v).lower()):
+                header_row = r
+                break
+        if header_row:
+            break
+
+    if header_row is None:
+        wb.close()
+        return {}
+
+    # Map column indices to header names
+    col_map: dict[int, str] = {}
+    for c in range(2, ws.max_column + 1):
+        v = _cell(ws, header_row, c)
+        if v:
+            col_map[c] = str(v).strip().lower()
+
+    for r in range(header_row + 1, ws.max_row + 1):
+        brand = _cell(ws, r, 1)
+        if not brand or str(brand).strip() == "":
+            continue
+        brand = str(brand).strip()
+        if brand.lower().startswith("note"):
+            continue
         bt = BrandTradeOff(brand=brand)
-        for key, val in data.items():
-            kl = key.lower()
-            if "msrp" in kl:
-                bt.msrp = _float(val)
-            elif "price" in kl and "perceived" in kl:
+        # Col 2 is always MSRP (may not have a header)
+        bt.msrp = _float(_cell(ws, r, 2))
+        for c, header in col_map.items():
+            val = _cell(ws, r, c)
+            if "price" in header and "perceived" in header:
                 bt.perceived_price = str(val or "")
-            elif "effect" in kl:
+            elif "effect" in header:
                 bt.perceived_effectiveness = str(val or "")
-            elif "purchased" in kl:
+            elif "purchased" in header:
                 bt.purchased_pct = _float(val)
         results[brand] = bt
+
+    wb.close()
     return results
 
 

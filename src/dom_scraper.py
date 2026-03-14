@@ -206,7 +206,7 @@ class DecisionInputMap:
     #   value "1" = Drop alcohol (alcohol → 0, unit cost $1.00)
     #   value "0" = Switch from cough suppressant to expectorant
     #               (cough_supp → 0, expectorant → 200, unit cost $1.11)
-    # Only available in Years 1 and 2.
+    # Only available when entering Decision1+ (i.e., at Year1 or later pages).
     brand_reformulation_choice: str = "choice"
 
     # -- Pricing (decisions/pricing) --
@@ -356,11 +356,12 @@ SECTIONS_WITH_SUBTABS = {
 # ---------------------------------------------------------------------------
 # Period-dependent input availability
 # ---------------------------------------------------------------------------
-# At Start (period 0), decisions have ALREADY been submitted to produce Year 1
-# results. Most decision pages are READ-ONLY at Start. Only a subset of
-# advertising inputs remain editable.
+# At Start (period 0), the Decisions tab shows Decision0 — the decisions to be
+# made given Year0 state that will influence Year1. Most inputs are READ-ONLY
+# at Start (showing defaults). Only a subset of advertising inputs are editable.
 #
-# At Year 1 (period 1) and beyond, ALL 63 decision inputs are editable.
+# At Year 1 (period 1), the Decisions tab shows Decision1 — all 63 inputs are
+# editable, to be submitted to influence Year2.
 #
 # Verified 2026-03-14 by exhaustive DOM audit:
 #
@@ -434,7 +435,7 @@ INPUTS_BY_PERIOD = {
             ],
         },
     },
-    # Year 2 expected same as Year 1 (63 inputs)
+    # No Decision2 exists; if period 2 is reached, inputs match period 1
     2: None,  # same as period 1
 }
 

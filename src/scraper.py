@@ -71,7 +71,7 @@ ALL_PERIODS = [
     (2, "Year2"),
 ]
 
-# Default periods to download (Year2 only available after Decision2)
+# Default periods to download (Year2 only available after Decision1)
 PERIODS = ALL_PERIODS[:2]
 
 

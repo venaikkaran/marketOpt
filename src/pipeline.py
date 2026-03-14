@@ -14,8 +14,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from pathlib import Path
+from typing import Any
 
 from src.decision import DecisionVector
 from src.flatten import flatten_year, flatten_numeric_only
@@ -88,30 +90,7 @@ def run_parse(run_id: str) -> None:
 
     print(f"Parsing run {run_id} (years: {years})")
 
-    all_flat: dict[str, float | str | None] = {}
-    last_yd = None
-
-    for y in years:
-        yd = load_year(y, downloads_dir=rd)
-        flat = flatten_year(yd)
-        numeric = flatten_numeric_only(flat)
-        print(f"  Year {y}: {len(numeric)} numeric fields")
-
-        for k, v in flat.items():
-            all_flat[f"year{y}.{k}"] = v
-
-        last_yd = yd
-
-    # Extract decision from the last available year
-    if last_yd:
-        dv = DecisionVector.from_year_data(last_yd)
-        update_run(run_id, decision=dv.to_dict())
-        print(f"  Decision extracted: MSRP={dv.msrp}, media={dv.media_expenditure}M")
-
-    # Extract key outcomes from the last year
-    last_year = max(years)
-    outcomes = {}
-    for metric in [
+    OUTCOME_METRICS = [
         "performance_summary.stock_price",
         "performance_summary.net_income",
         "performance_summary.cumulative_net_income",
@@ -119,14 +98,62 @@ def run_parse(run_id: str) -> None:
         "performance_summary.market_share_unit_pct",
         "performance_summary.market_share_dollar_pct",
         "performance_summary.marketing_efficiency_index",
-    ]:
-        key = f"year{last_year}.{metric}"
-        if key in all_flat:
-            outcomes[metric] = all_flat[key]
+    ]
 
-    if last_yd:
-        append_history(run_id, dv.to_dict(), outcomes)
-    print(f"  Outcomes: {outcomes}")
+    # Parse and flatten each year, write JSON for review
+    year_data: dict[int, Any] = {}
+    year_flat: dict[int, dict[str, float | str | None]] = {}
+
+    for y in years:
+        yd = load_year(y, downloads_dir=rd)
+        flat = flatten_year(yd)
+        numeric = flatten_numeric_only(flat)
+        print(f"  Year {y}: {len(numeric)} numeric fields")
+
+        # Write full parsed data to JSON for manual review
+        parsed_path = rd / f"year{y}_parsed.json"
+        with open(parsed_path, "w") as f:
+            json.dump(flat, f, indent=2, default=str)
+        print(f"  Written: {parsed_path}")
+
+        year_data[y] = yd
+        year_flat[y] = flat
+
+    # Extract decision→outcome pairs for each transition.
+    # YearN+1 reports reflect Decision(N): the decision made at YearN.
+    # So we extract the decision from YearN+1 data and pair it with
+    # YearN+1 outcomes.
+    decisions: dict[str, dict] = {}
+
+    for outcome_year in sorted(year_data.keys()):
+        if outcome_year == 0:
+            continue  # Year0 is initial state, no prior decision produced it
+        decision_index = outcome_year - 1  # Decision(N) produces Year(N+1)
+
+        dv = DecisionVector.from_year_data(year_data[outcome_year])
+        decisions[f"d{decision_index}"] = dv.to_dict()
+
+        outcomes = {}
+        for metric in OUTCOME_METRICS:
+            if metric in year_flat[outcome_year]:
+                outcomes[metric] = year_flat[outcome_year][metric]
+
+        append_history(
+            run_id,
+            dv.to_dict(),
+            outcomes,
+            decision_index=decision_index,
+            source_year=decision_index,
+            outcome_year=outcome_year,
+        )
+        print(
+            f"  D{decision_index} (Year{decision_index}→Year{outcome_year}): "
+            f"MSRP={dv.msrp}, media={dv.media_expenditure}M"
+        )
+        print(f"    Outcomes: {outcomes}")
+
+    if decisions:
+        update_run(run_id, decisions=decisions, decision=None)
 
 
 def main():

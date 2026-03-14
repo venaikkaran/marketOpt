@@ -84,7 +84,12 @@ class DecisionVector:
 
     @classmethod
     def from_year_data(cls, yd) -> DecisionVector:
-        """Extract current Allround/Allstar decisions from parsed YearData."""
+        """Extract the decision reflected in YearData reports.
+
+        YearN reports show the effects of Decision(N-1).
+        E.g., Year1 data reflects Decision0; Year2 data reflects Decision1.
+        This does NOT extract the pending decision to be made at YearN.
+        """
         dv = cls()
 
         # Pricing
