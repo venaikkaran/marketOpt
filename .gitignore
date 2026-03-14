@@ -8,3 +8,13 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Run data and downloads
+runs/
+downloads/
+
+# OS files
+.DS_Store
+
+# Editor/tool files
+.python-version

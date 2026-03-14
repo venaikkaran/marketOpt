@@ -22,7 +22,7 @@ USER_ID = "utda53727123"
 PASSWORD = "CleverGoal2"
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DOWNLOAD_DIR = os.path.join(PROJECT_ROOT, "downloads")
+DOWNLOAD_DIR = os.path.join(PROJECT_ROOT, "runs")
 
 # Sections to download, organized by tab.
 # Key format matches the data-dlc / menu path used by the sim.
@@ -65,10 +65,14 @@ SURVEY_SECTIONS = [
 
 ALL_SECTIONS = COMPANY_SECTIONS + MARKET_SECTIONS + SURVEY_SECTIONS
 
-PERIODS = [
+ALL_PERIODS = [
     (0, "Year0"),  # "Start" in the UI
     (1, "Year1"),
+    (2, "Year2"),
 ]
+
+# Default periods to download (Year2 only available after Decision2)
+PERIODS = ALL_PERIODS[:2]
 
 
 def human_delay(low=0.8, high=2.5):
@@ -223,9 +227,11 @@ def cleanup_extra_tabs(driver):
     driver.switch_to.window(current)
 
 
-def download_all_sections(driver, download_dir):
+def download_all_sections(driver, download_dir, periods=None):
     """Download XLS for all sections across all periods."""
-    for period_index, period_name in PERIODS:
+    if periods is None:
+        periods = PERIODS
+    for period_index, period_name in periods:
         print(f"\n{'='*60}")
         print(f"Switching to {period_name} (period={period_index})")
         print(f"{'='*60}")
@@ -288,50 +294,73 @@ def download_all_sections(driver, download_dir):
             cleanup_extra_tabs(driver)
 
 
-def main():
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+def create_driver(download_dir: str | None = None) -> webdriver.Chrome:
+    """Create a Chrome driver configured for downloading to the given directory."""
+    dl_dir = download_dir or DOWNLOAD_DIR
+    os.makedirs(dl_dir, exist_ok=True)
 
     options = webdriver.ChromeOptions()
     options.add_argument("--start-maximized")
 
-    # Set download directory and suppress multiple-download prompt
     prefs = {
-        "download.default_directory": DOWNLOAD_DIR,
+        "download.default_directory": dl_dir,
         "download.prompt_for_download": False,
         "download.directory_upgrade": True,
         "profile.default_content_setting_values.automatic_downloads": 1,
     }
     options.add_experimental_option("prefs", prefs)
 
-    driver = webdriver.Chrome(options=options)
+    return webdriver.Chrome(options=options)
+
+
+def scrape(
+    download_dir: str | None = None,
+    periods: list[tuple[int, str]] | None = None,
+    driver: webdriver.Chrome | None = None,
+) -> str:
+    """Run the full scrape pipeline.
+
+    Args:
+        download_dir: Where to save downloaded files. Defaults to DOWNLOAD_DIR.
+        periods: Which periods to download. Defaults to PERIODS (Year0, Year1).
+        driver: Existing Chrome driver to reuse. If None, creates a new one.
+
+    Returns:
+        The download directory path.
+    """
+    dl_dir = download_dir or DOWNLOAD_DIR
+    owns_driver = driver is None
+
+    if owns_driver:
+        driver = create_driver(dl_dir)
+
     wait = WebDriverWait(driver, 20)
 
     try:
         login_and_launch(driver, wait)
-        download_all_sections(driver, DOWNLOAD_DIR)
+        download_all_sections(driver, dl_dir, periods=periods)
 
-        # Final cleanup of any stray tabs
         if len(driver.window_handles) > 1:
             cleanup_extra_tabs(driver)
 
         print(f"\n{'='*60}")
         print("All downloads complete!")
-        print(f"Files saved in: {DOWNLOAD_DIR}")
+        print(f"Files saved in: {dl_dir}")
         print(f"{'='*60}")
 
-        # List all downloaded files
-        for f in sorted(os.listdir(DOWNLOAD_DIR)):
-            print(f"  {f}")
-
-        print("\nBrowser is open. Press Ctrl+C to close...")
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("Closing browser...")
+        for f in sorted(os.listdir(dl_dir)):
+            if f.endswith(".xlsx"):
+                print(f"  {f}")
 
     finally:
-        driver.quit()
+        if owns_driver:
+            driver.quit()
+
+    return dl_dir
+
+
+def main():
+    scrape()
 
 
 if __name__ == "__main__":
