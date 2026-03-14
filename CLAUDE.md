@@ -26,7 +26,7 @@ We have two ways of running Simulation in the webapp. Consider the following nam
 
 This means that sometimes, we can only run an evaluation from Year1 -> Decision1 -> Year2. Other times, we can run the whole routine i.e., Year0 -> Decision0 -> Year1 -> Decision1 -> Year2.
 
-## The actualy simulation engine 
+## The actual simulation engine 
 You have the ability to play with the website yourself, if need be, using the Chrome Devtools mcp server/skill/plugin - simply use this mcp server/skill/plugin/tool and follow the steps. However, be EXTREMELY CAREFUL - DO NOT CLICK THE "ADVANCE", "REPLAY - XXX left in period", and "RESTART - 89 LEFT" buttons. Again, strictly do NOT press/click/touch ANY of these buttons or interact with them in ANY WAY. DO NOT CLICK THE "ADVANCE", "REPLAY - XXX left in period", and "RESTART - 89 LEFT" buttons. Again, strictly do NOT press/click/touch ANY of these buttons or interact with them in ANY WAY.
 1) Go to www.interpretive.com/students
 2) User Name: utda53727123
@@ -60,6 +60,7 @@ Scrape State → Optimizer Suggests → Validate Constraints → Human Reviews �
 
 ## Decision Constraints (from `src/constraints.py`)
 
+### Per-field bounds
 - **Sales Force** (8 fields): integers [0, 1000]
 - **MSRP**: continuous [$1, $50]
 - **Volume Discounts** (4 fields): continuous [10%, 50%]
@@ -73,6 +74,14 @@ Scrape State → Optimizer Suggests → Validate Constraints → Human Reviews �
 - **Coupon Amount**: discrete {0, 1, 2, 3} ($0.25–$1.00)
 - **Brand Reformulation**: discrete {0, 1, 2} (Year 1+ only)
 - Total: 59 fields (20 continuous, 8 integer, 27 binary, 4 discrete)
+
+### Cross-field constraints
+- **Sum groups**: Ad message mix must sum to exactly 100% (server-enforced)
+- **Ordering**: Volume discounts must be monotonically non-decreasing (server-enforced)
+- **Conditional irrelevance**: Channel checkboxes are don't-care when their budget gate is $0
+- **Equivalence groups**: All-checked = all-unchecked for symptom/demo targets (canonicalized to all-False)
+- **Formulation-benefit consistency**: Reformulation choice restricts valid benefit claims
+- **Budget ceiling**: Total spending vs. available budget (NOT server-enforced, but practically critical)
 
 ## Data Contracts
 

@@ -156,11 +156,105 @@ RADIO_FIELDS = {"ad_agency", "brand_reformulation"}
 SELECT_FIELDS = {"msg_comparison_target", "coupon_amount"}
 
 
-def load_suggestion(path: str | Path) -> dict[str, Any]:
+# ---------------------------------------------------------------------------
+# DOM-to-suggestion key mapping
+# ---------------------------------------------------------------------------
+# The DOM scraper (dom_scraper.js_scrape_decision_inputs) returns a dict keyed
+# by raw HTML field names (e.g., "sf1", "ad_budget1", "illness1-COLD").
+# The optimizer and constraints system use human-readable suggestion keys
+# (e.g., "sf_independent", "ad_budget", "symptom_cold").
+#
+# HTML_TO_SUGGESTION is the reverse of FIELD_MAP: it maps HTML names back to
+# suggestion keys so we can convert DOM scraper output into the format that
+# constraints.py and the optimizer expect.
+#
+# This is essential for the relative bounds (trust region) workflow:
+#   1. Scrape current decisions from live DOM → HTML-keyed dict
+#   2. dom_to_suggestion() → suggestion-keyed dict (reference point)
+#   3. get_relative_bounds(reference) → narrowed optimizer search bounds
+HTML_TO_SUGGESTION = {v: k for k, v in FIELD_MAP.items()}
+
+
+def dom_to_suggestion(dom_inputs: dict[str, Any]) -> dict[str, Any]:
+    """Convert DOM scraper output (HTML field names) to suggestion-key format.
+
+    This is the bridge between the live simulator DOM and the constraint/optimizer
+    system. The DOM scraper reads raw HTML input values; this function translates
+    those into the canonical suggestion-key format and coerces types appropriately.
+
+    Type conversions performed:
+      - Integer fields (SF headcount): string "29" → int 29
+      - Continuous fields (budgets, percentages): string "18.0" → float 18.0
+      - Binary fields (checkboxes): JS true/false → Python bool
+      - Discrete fields (agency, coupon): kept as string for option matching
+
+    Unknown HTML fields (hidden inputs, non-decision fields) are silently skipped.
+
+    Typical usage:
+        # With Chrome DevTools MCP:
+        result = evaluate_script(js_scrape_decision_inputs())
+        reference = dom_to_suggestion(result)
+        bounds = get_relative_bounds(reference)
+
+    Args:
+        dom_inputs: Dict from js_scrape_decision_inputs() keyed by HTML names
+            (e.g., {"sf1": "29", "ad_budget1": "18.0", "illness1-COLD": true}).
+
+    Returns:
+        Dict in suggestion-key format (e.g., {"sf_independent": 3, "ad_budget": 18.0,
+        "symptom_cold": True}) ready for use with constraints.py functions like
+        get_relative_bounds(), validate_suggestion(), normalize_suggestion().
+    """
+    result: dict[str, Any] = {}
+    for html_name, value in dom_inputs.items():
+        suggestion_key = HTML_TO_SUGGESTION.get(html_name)
+        if suggestion_key is None:
+            continue  # skip fields not in our decision map (e.g., hidden fields)
+
+        c = CONSTRAINTS.get(suggestion_key)
+        if c is None:
+            result[suggestion_key] = value
+            continue
+
+        # Type conversion based on constraint type
+        if c.type == "integer":
+            try:
+                result[suggestion_key] = int(float(value))
+            except (ValueError, TypeError):
+                result[suggestion_key] = value
+        elif c.type == "continuous":
+            try:
+                result[suggestion_key] = float(value)
+            except (ValueError, TypeError):
+                result[suggestion_key] = value
+        elif c.type == "binary":
+            # DOM scraper returns True/False for checkboxes
+            result[suggestion_key] = bool(value)
+        elif c.type == "discrete":
+            result[suggestion_key] = str(value)
+        else:
+            result[suggestion_key] = value
+
+    return result
+
+
+def load_suggestion(
+    path: str | Path,
+    available_budget: float | None = None,
+    previous_total_sf: int = 142,
+    sf_cost_params: dict | None = None,
+) -> dict[str, Any]:
     """Load a suggestion JSON file and validate against all constraints.
 
-    Raises ValueError if ANY constraint is violated. The suggestion will
-    NOT be applied unless every field passes validation.
+    Raises ValueError if any hard constraint is violated. Warnings (prefixed
+    with "WARNING:") are printed but do NOT cause rejection.
+
+    Args:
+        path: Path to the suggestion JSON file.
+        available_budget: Total available budget in $M (from income_statement.next_year_budget).
+            If provided, budget validation is performed as a hard constraint.
+        previous_total_sf: Prior period total SF headcount (for SF cost calculation).
+        sf_cost_params: Per-person SF cost params (uses defaults if None).
     """
     path = Path(path)
     with open(path) as f:
@@ -178,12 +272,27 @@ def load_suggestion(path: str | Path) -> dict[str, Any]:
     constraint_errors = _validate(data)
     errors.extend(constraint_errors)
 
-    if errors:
-        raise ValueError(
-            "Suggestion REJECTED — constraint violations found:\n  "
-            + "\n  ".join(errors)
-            + "\n\nNo decisions were applied. Fix the above errors and retry."
-        )
+    # Budget validation (optional — requires scraped budget data)
+    if available_budget is not None:
+        from src.constraints import validate_budget
+        budget_errors = validate_budget(data, available_budget, previous_total_sf, sf_cost_params)
+        for be in budget_errors:
+            errors.append(be)
+
+    # Separate hard errors from warnings
+    warnings = [e for e in errors if e.startswith("WARNING:")]
+    hard_errors = [e for e in errors if not e.startswith("WARNING:")]
+
+    # Print warnings (they don't block application)
+    for w in warnings:
+        print(w)
+
+    if hard_errors:
+        msg = "Suggestion REJECTED — constraint violations found:\n  " + "\n  ".join(hard_errors)
+        if warnings:
+            msg += "\n\nAdditionally, the following warnings were raised:\n  " + "\n  ".join(warnings)
+        msg += "\n\nNo decisions were applied. Fix the above errors and retry."
+        raise ValueError(msg)
 
     return data
 
