@@ -65,14 +65,14 @@ class Constraint:
 
 CONSTRAINTS: dict[str, Constraint] = {
     # === Sales Force (8 integer fields, min=0, max=1000) ===
-    "sf_independent":   Constraint("sf_independent",   "integer", min=0, max=1000, description="Independent Drugstores headcount"),
-    "sf_chain":         Constraint("sf_chain",         "integer", min=0, max=1000, description="Chain Drugstores headcount"),
-    "sf_grocery":       Constraint("sf_grocery",       "integer", min=0, max=1000, description="Grocery Stores headcount"),
-    "sf_convenience":   Constraint("sf_convenience",   "integer", min=0, max=1000, description="Convenience Stores headcount"),
-    "sf_mass":          Constraint("sf_mass",          "integer", min=0, max=1000, description="Mass Merchandisers headcount"),
-    "sf_wholesaler":    Constraint("sf_wholesaler",    "integer", min=0, max=1000, description="Wholesaler Support headcount"),
-    "sf_merchandisers": Constraint("sf_merchandisers", "integer", min=0, max=1000, description="Merchandisers headcount"),
-    "sf_detailers":     Constraint("sf_detailers",     "integer", min=0, max=1000, description="Detailers headcount"),
+    "sf_independent":   Constraint("sf_independent",   "integer", min=0, max=50, description="Independent Drugstores headcount"),
+    "sf_chain":         Constraint("sf_chain",         "integer", min=0, max=50, description="Chain Drugstores headcount"),
+    "sf_grocery":       Constraint("sf_grocery",       "integer", min=0, max=50, description="Grocery Stores headcount"),
+    "sf_convenience":   Constraint("sf_convenience",   "integer", min=0, max=50, description="Convenience Stores headcount"),
+    "sf_mass":          Constraint("sf_mass",          "integer", min=0, max=50, description="Mass Merchandisers headcount"),
+    "sf_wholesaler":    Constraint("sf_wholesaler",    "integer", min=0, max=50, description="Wholesaler Support headcount"),
+    "sf_merchandisers": Constraint("sf_merchandisers", "integer", min=0, max=50, description="Merchandisers headcount"),
+    "sf_detailers":     Constraint("sf_detailers",     "integer", min=0, max=50, description="Detailers headcount"),
 
     # === Pricing ===
     "msrp":               Constraint("msrp",               "continuous", min=1.0,  max=50.0, description="Manufacturer Suggested Retail Price ($)"),
