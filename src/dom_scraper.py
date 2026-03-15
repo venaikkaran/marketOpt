@@ -1,25 +1,27 @@
 """
-DOM-based scraper for PharmaSim simulator.
+DOM-based scraper for PharmaSim simulator — REPORT sections only.
 
-Extracts ALL data directly from the browser DOM using JavaScript evaluation,
-eliminating the need for xlsx download/parse. Works with both Selenium
-(driver.execute_script) and Chrome DevTools MCP (evaluate_script).
+Extracts report data (Company, Market, Consumer Survey) directly from the
+browser DOM using JavaScript evaluation, eliminating the need for xlsx
+download/parse. Works with both Selenium (driver.execute_script) and Chrome
+DevTools MCP (evaluate_script).
+
+Decision-page scraping has been consolidated into ``decision_scraper.py``.
 
 Extensible across Year0, Year1, and Year2.
 
 Usage with Selenium:
-    from src.dom_scraper import scrape_all_sections, scrape_period
-    data = driver.execute_script(scrape_all_sections())
+    from src.dom_scraper import js_scrape_all_report_data
+    data = driver.execute_script(js_scrape_all_report_data())
 
 Usage with Chrome DevTools MCP:
-    # Pass the JS string from scrape_all_sections() to evaluate_script
+    # Pass the JS string from js_scrape_all_report_data() to evaluate_script
 """
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -121,7 +123,7 @@ JS_NAVIGATE_SECTION = """
 """
 
 # ---------------------------------------------------------------------------
-# All sections with their menu paths
+# Report sections with their menu paths (decisions excluded)
 # ---------------------------------------------------------------------------
 
 # (parent_menu, section_path, friendly_name, category)
@@ -157,185 +159,7 @@ ALL_SECTIONS = [
     ("survey", "survey/criteria", "decision_criteria", "survey"),
     ("survey", "survey/perceptions", "brand_perceptions", "survey"),
     ("survey", "survey/tradeoffs", "trade_offs", "survey"),
-    # Decisions (read-only observation of current settings)
-    ("decisions", "decisions/sales_force", "decisions_sales_force", "decisions"),
-    ("decisions", "decisions/brands", "decisions_brands", "decisions"),
-    ("decisions", "decisions/pricing", "decisions_pricing", "decisions"),
-    ("decisions", "decisions/advertising", "decisions_advertising", "decisions"),
-    ("decisions", "decisions/promotion", "decisions_promotion", "decisions"),
-    ("decisions", "decisions/special", "decisions_special", "decisions"),
-    ("decisions", "decisions/review", "decisions_summary", "decisions"),
 ]
-
-# Sections that have tabbed sub-views (need special handling)
-TABBED_SECTIONS = {
-    "decisions/brands": ["Overview", "Reformulation"],
-}
-
-# ---------------------------------------------------------------------------
-# Decision input variable mapping
-# ---------------------------------------------------------------------------
-
-@dataclass
-class DecisionInputMap:
-    """Maps all HTML input field names to their semantic meaning.
-
-    These are the variables that the optimizer can SET on the webpage
-    to submit decisions. Field values are the HTML ``name`` (or ``id``
-    for checkboxes) attributes used in the simulator forms.
-
-    Field naming convention: ``<category>_<detail>``
-    Value convention: string = HTML field name/id to target.
-    """
-
-    # -- Sales Force (decisions/sales_force) --
-    # Direct channels (headcount integers)
-    sf_direct_independent: str = "sf1"    # Independent Drugstores
-    sf_direct_chain: str = "sf2"          # Chain Drugstores
-    sf_direct_grocery: str = "sf3"        # Grocery Stores
-    sf_direct_convenience: str = "sf4"    # Convenience Stores
-    sf_direct_mass: str = "sf5"           # Mass Merchandisers
-    # Indirect channels (headcount integers)
-    sf_indirect_wholesaler: str = "sf6"   # Wholesaler Support
-    sf_indirect_merchandisers: str = "sf7"  # Merchandisers
-    sf_indirect_detailers: str = "sf8"    # Detailers
-
-    # -- Brand Reformulation (decisions/brands -> Reformulation tab) --
-    # Radio name="choice", individual ids: choice2, choice1, choice0
-    #   value "2" = Keep the original formula
-    #   value "1" = Drop alcohol (alcohol → 0, unit cost $1.00)
-    #   value "0" = Switch from cough suppressant to expectorant
-    #               (cough_supp → 0, expectorant → 200, unit cost $1.11)
-    # Only available when entering Decision1+ (i.e., at Year1 or later pages).
-    brand_reformulation_choice: str = "choice"
-
-    # -- Pricing (decisions/pricing) --
-    msrp: str = "msrp1"                  # Mfr. Suggested Retail Price ($)
-    discount_under_250: str = "disc1-1"   # Volume discount % for orders < 250
-    discount_under_2500: str = "disc1-2"  # Volume discount % for orders < 2500
-    discount_2500_plus: str = "disc1-3"   # Volume discount % for orders 2500+
-    discount_wholesale: str = "disc1-4"   # Wholesale discount %
-
-    # -- Advertising (decisions/advertising) --
-    ad_budget: str = "ad_budget1"  # Advertising budget in millions ($)
-
-    # Ad agency (radio, name="agency1")
-    #   value "1" = Brewster, Maxwell, & Wheeler (15% fee)
-    #   value "2" = Sully and Rogers (10% fee)
-    #   value "3" = Lester Loebol and Company (5% fee)
-    ad_agency: str = "agency1"
-
-    # Symptom targets (checkboxes, name="illness1[]")
-    #   Checking NONE = targeting all. Checking specific = targeting those.
-    symptom_target_cold: str = "illness1-COLD"        # value="4096"
-    symptom_target_cough: str = "illness1-COUGH"      # value="8192"
-    symptom_target_allergy: str = "illness1-ALLERGY"   # value="16384"
-
-    # Demographic targets (checkboxes, name="demo1[]")
-    #   Checking NONE = targeting all. Checking specific = targeting those.
-    demo_young_singles: str = "demo1-1"    # value="1"
-    demo_young_families: str = "demo1-2"   # value="2"
-    demo_mature_families: str = "demo1-4"  # value="4"
-    demo_empty_nesters: str = "demo1-8"    # value="8"
-    demo_retired: str = "demo1-16"         # value="16"
-
-    # Ad messaging mix (must sum to 100%)
-    msg_primary_pct: str = "primary_msg1"
-    msg_benefits_pct: str = "benefit_msg1"
-    msg_comparison_pct: str = "compare_msg1"
-    msg_comparison_target: str = "compare_target1"  # <select> — use COMPARISON_TARGETS dict
-    msg_reminder_pct: str = "reminder_msg1"
-
-    # Promote benefits (checkboxes, name="benefit1[]")
-    benefit_relieves_aches: str = "benefit1-1"           # value="1"
-    benefit_clears_nasal: str = "benefit1-2"             # value="2"
-    benefit_reduces_chest: str = "benefit1-3"            # value="3"
-    benefit_dries_runny_nose: str = "benefit1-4"         # value="4"
-    benefit_suppresses_coughing: str = "benefit1-5"      # value="5"
-    benefit_relieves_allergies: str = "benefit1-6"       # value="6"
-    benefit_minimizes_side_effects: str = "benefit1-7"   # value="7"
-    benefit_wont_cause_drowsiness: str = "benefit1-8"    # value="8"
-    benefit_helps_you_rest: str = "benefit1-9"           # value="9"
-
-    # -- Promotion (decisions/promotion) --
-    # Promotional allowance % by channel (range 10-20%)
-    allowance_independent: str = "allowance1-1"    # Independent Drugstores
-    allowance_chain: str = "allowance1-2"          # Chain Drugstores
-    allowance_grocery: str = "allowance1-3"        # Grocery Stores
-    allowance_convenience: str = "allowance1-4"    # Convenience Stores
-    allowance_mass: str = "allowance1-5"           # Mass Merchandisers
-    allowance_wholesale: str = "allowance1-6"      # Wholesalers
-
-    # Co-op advertising budget (millions $) + channel participation checkboxes
-    coop_ad_budget: str = "coop_ad_budget1"
-    coop_ad_independent: str = "coop_ad1-1"    # checkbox value="1"
-    coop_ad_chain: str = "coop_ad1-2"          # checkbox value="1"
-    coop_ad_grocery: str = "coop_ad1-3"        # checkbox value="1"
-    coop_ad_convenience: str = "coop_ad1-4"    # checkbox value="1"
-    coop_ad_mass: str = "coop_ad1-5"           # checkbox value="1"
-
-    # Point of Purchase budget (millions $) + channel participation checkboxes
-    pop_budget: str = "display_budget1"
-    pop_independent: str = "display_ad1-1"     # checkbox value="1"
-    pop_chain: str = "display_ad1-2"           # checkbox value="1"
-    pop_grocery: str = "display_ad1-3"         # checkbox value="1"
-    pop_convenience: str = "display_ad1-4"     # checkbox value="1"
-    pop_mass: str = "display_ad1-5"            # checkbox value="1"
-
-    # Trial size budget (millions $)
-    trial_budget: str = "trial_budget1"
-
-    # Coupon budget (millions $) + coupon face value
-    coupon_budget: str = "coupon_budget1"
-    # <select> name="coupon_amt1"
-    #   value "0" = $0.25
-    #   value "1" = $0.50
-    #   value "2" = $0.75
-    #   value "3" = $1.00
-    coupon_amount: str = "coupon_amt1"
-
-
-# Ad agency IDs and names
-AD_AGENCIES = {
-    "1": "Brewster, Maxwell, & Wheeler (15%)",
-    "2": "Sully and Rogers (10%)",
-    "3": "Lester Loebol and Company (5%)",
-}
-
-# Comparison target brand IDs for the advertising select dropdown
-COMPARISON_TARGETS = {
-    "Believe": "3",
-    "Besthelp": "2",
-    "Coldcure": "11",
-    "Coughcure": "4",
-    "Defogg": "6",
-    "Dripstop": "5",
-    "Dryup": "7",
-    "Effective": "8",
-    "End": "10",
-    "Extra": "9",
-}
-
-# Coupon face values
-COUPON_AMOUNTS = {
-    "0": "$0.25",
-    "1": "$0.50",
-    "2": "$0.75",
-    "3": "$1.00",
-}
-
-# Benefit checkbox value-to-label mapping
-BENEFIT_LABELS = {
-    "1": "Relieves Aches",
-    "2": "Clears Nasal Congestion",
-    "3": "Reduces Chest Congestion",
-    "4": "Dries Up Runny Nose",
-    "5": "Suppresses Coughing",
-    "6": "Relieves Allergy Symptoms",
-    "7": "Minimizes Side Effects",
-    "8": "Won't Cause Drowsiness",
-    "9": "Helps You Rest",
-}
 
 # Sections that have sub-tabs/views exposing additional data.
 # The scraper must click these to capture complete data.
@@ -353,95 +177,9 @@ SECTIONS_WITH_SUBTABS = {
     ],
 }
 
-# ---------------------------------------------------------------------------
-# Period-dependent input availability
-# ---------------------------------------------------------------------------
-# At Start (period 0), the Decisions tab shows Decision0 — the decisions to be
-# made given Year0 state that will influence Year1. Most inputs are READ-ONLY
-# at Start (showing defaults). Only a subset of advertising inputs are editable.
-#
-# At Year 1 (period 1), the Decisions tab shows Decision1 — all 63 inputs are
-# editable, to be submitted to influence Year2.
-#
-# Verified 2026-03-14 by exhaustive DOM audit:
-#
-# Period 0 (Start) — 20 editable inputs:
-#   Advertising only: agency1 (3 radios), illness1[] (3 checkboxes),
-#   demo1[] (5 checkboxes), benefit1[] (9 checkboxes)
-#   NOT editable: ad_budget1, primary_msg1, benefit_msg1, compare_msg1,
-#   compare_target1, reminder_msg1, ALL sales force, ALL pricing,
-#   ALL promotion, brands reformulation
-#
-# Period 1+ (Year 1, Year 2) — 63 editable inputs:
-#   Sales Force: 8  (sf1–sf8)
-#   Pricing: 5  (msrp1, disc1-1 to disc1-4)
-#   Advertising: 26  (ad_budget1, agency1×3, illness1[]×3, demo1[]×5,
-#     primary_msg1, benefit_msg1, compare_msg1, compare_target1,
-#     reminder_msg1, benefit1[]×9)
-#   Promotion: 21  (allowance1-1 to 1-6, coop_ad_budget1, coop_ad1-1 to 1-5,
-#     display_budget1, display_ad1-1 to 1-5, trial_budget1, coupon_budget1,
-#     coupon_amt1)
-#   Brands Reformulation: 3  (choice radio: "2"=keep, "1"=drop alcohol,
-#     "0"=switch to expectorant) — only Years 1 and 2
-#   Special: 0 (period-dependent, may have inputs in later years)
-
-INPUTS_BY_PERIOD = {
-    0: {
-        "total": 20,
-        "pages": {
-            "decisions/advertising": [
-                "agency1",  # radio (3 options)
-                "illness1-COLD", "illness1-COUGH", "illness1-ALLERGY",
-                "demo1-1", "demo1-2", "demo1-4", "demo1-8", "demo1-16",
-                "benefit1-1", "benefit1-2", "benefit1-3", "benefit1-4",
-                "benefit1-5", "benefit1-6", "benefit1-7", "benefit1-8",
-                "benefit1-9",
-            ],
-        },
-    },
-    1: {
-        "total": 63,
-        "pages": {
-            "decisions/sales_force": [
-                "sf1", "sf2", "sf3", "sf4", "sf5", "sf6", "sf7", "sf8",
-            ],
-            "decisions/pricing": [
-                "msrp1", "disc1-1", "disc1-2", "disc1-3", "disc1-4",
-            ],
-            "decisions/advertising": [
-                "ad_budget1",
-                "agency1",  # radio (3 options)
-                "illness1-COLD", "illness1-COUGH", "illness1-ALLERGY",
-                "demo1-1", "demo1-2", "demo1-4", "demo1-8", "demo1-16",
-                "primary_msg1", "benefit_msg1", "compare_msg1",
-                "compare_target1", "reminder_msg1",
-                "benefit1-1", "benefit1-2", "benefit1-3", "benefit1-4",
-                "benefit1-5", "benefit1-6", "benefit1-7", "benefit1-8",
-                "benefit1-9",
-            ],
-            "decisions/promotion": [
-                "allowance1-1", "allowance1-2", "allowance1-3",
-                "allowance1-4", "allowance1-5", "allowance1-6",
-                "coop_ad_budget1",
-                "coop_ad1-1", "coop_ad1-2", "coop_ad1-3",
-                "coop_ad1-4", "coop_ad1-5",
-                "display_budget1",
-                "display_ad1-1", "display_ad1-2", "display_ad1-3",
-                "display_ad1-4", "display_ad1-5",
-                "trial_budget1", "coupon_budget1", "coupon_amt1",
-            ],
-            "decisions/brands": [
-                "choice",  # radio (3 options: "2", "1", "0")
-            ],
-        },
-    },
-    # No Decision2 exists; if period 2 is reached, inputs match period 1
-    2: None,  # same as period 1
-}
-
 
 # ---------------------------------------------------------------------------
-# JavaScript extraction functions for each section
+# JavaScript extraction functions for report sections
 # ---------------------------------------------------------------------------
 
 def js_extract_generic_tables() -> str:
@@ -510,9 +248,9 @@ def js_scrape_all_report_data() -> str:
     """JS that navigates to ALL report sections and extracts all data.
 
     Returns a dict keyed by section name with table data.
+    Only scrapes Company, Market, and Consumer Survey sections.
     IMPORTANT: Does NOT click Advance/Replay/Restart.
     """
-    # Build the section navigation list (excluding decisions for safety)
     report_sections = [
         s for s in ALL_SECTIONS
         if s[3] in ("company", "market", "survey")
@@ -562,78 +300,11 @@ async () => {{
 """
 
 
-def js_scrape_decision_inputs() -> str:
-    """JS that navigates to all Decision pages and extracts current input values.
+def js_scrape_period_reports() -> str:
+    """JS that scrapes ALL report data for the current period.
 
-    Returns a flat dict of input_name -> value for all decision variables.
-    IMPORTANT: Only READS values, never clicks Advance/Replay/Restart.
-    """
-    return f"""
-async () => {{
-    var getInputs = function() {{
-        var inputs = document.querySelectorAll(
-            'input:not([type="hidden"]), select, textarea'
-        );
-        var result = {{}};
-        inputs.forEach(function(inp) {{
-            if (inp.offsetParent === null) return;
-            var name = inp.name || inp.id;
-            if (!name) return;
-            if (inp.type === 'radio') {{
-                if (inp.checked) result[name] = inp.value;
-            }} else if (inp.type === 'checkbox') {{
-                result[inp.id || name] = inp.checked;
-            }} else {{
-                result[name] = inp.value;
-            }}
-        }});
-        return result;
-    }};
-
-    var allInputs = {{}};
-
-    // Sales Force
-    ui.menu.call(null, 'decisions', 'decisions/sales_force', {{}});
-    await new Promise(function(r) {{ setTimeout(r, 1500); }});
-    Object.assign(allInputs, getInputs());
-
-    // Brands - Overview (no inputs usually)
-    ui.menu.call(null, 'decisions', 'decisions/brands', {{}});
-    await new Promise(function(r) {{ setTimeout(r, 1500); }});
-    // Click Reformulation tab if present
-    var reformTab = Array.from(document.querySelectorAll('a, button')).find(
-        function(el) {{ return el.textContent.trim() === 'Reformulation' && el.offsetParent !== null; }}
-    );
-    if (reformTab) {{
-        reformTab.click();
-        await new Promise(function(r) {{ setTimeout(r, 1000); }});
-        Object.assign(allInputs, getInputs());
-    }}
-
-    // Pricing
-    ui.menu.call(null, 'decisions', 'decisions/pricing', {{}});
-    await new Promise(function(r) {{ setTimeout(r, 1500); }});
-    Object.assign(allInputs, getInputs());
-
-    // Advertising
-    ui.menu.call(null, 'decisions', 'decisions/advertising', {{}});
-    await new Promise(function(r) {{ setTimeout(r, 1500); }});
-    Object.assign(allInputs, getInputs());
-
-    // Promotion
-    ui.menu.call(null, 'decisions', 'decisions/promotion', {{}});
-    await new Promise(function(r) {{ setTimeout(r, 1500); }});
-    Object.assign(allInputs, getInputs());
-
-    return allInputs;
-}}
-"""
-
-
-def js_scrape_period_data() -> str:
-    """JS that scrapes ALL report data + decision inputs for the current period.
-
-    Returns {period, reports: {...}, decisions: {...}}.
+    Returns {period, reports: {...}}.
+    Decision inputs are NOT scraped here; use decision_scraper.py for that.
     IMPORTANT: Does NOT click Advance/Replay/Restart.
     """
     return f"""
@@ -672,55 +343,7 @@ async () => {{
         reports[sec.name] = parsed;
     }}
 
-    // --- Scrape decision inputs ---
-    var getInputs = function() {{
-        var inputs = document.querySelectorAll(
-            'input:not([type="hidden"]), select, textarea'
-        );
-        var result = {{}};
-        inputs.forEach(function(inp) {{
-            if (inp.offsetParent === null) return;
-            var name = inp.name || inp.id;
-            if (!name) return;
-            if (inp.type === 'radio') {{
-                if (inp.checked) result[name] = inp.value;
-            }} else if (inp.type === 'checkbox') {{
-                result[inp.id || name] = inp.checked;
-            }} else {{
-                result[name] = inp.value;
-            }}
-        }});
-        return result;
-    }};
-
-    var decisions = {{}};
-
-    var decisionPages = [
-        ['decisions', 'decisions/sales_force'],
-        ['decisions', 'decisions/pricing'],
-        ['decisions', 'decisions/advertising'],
-        ['decisions', 'decisions/promotion']
-    ];
-
-    for (var d = 0; d < decisionPages.length; d++) {{
-        ui.menu.call(null, decisionPages[d][0], decisionPages[d][1], {{}});
-        await new Promise(function(r) {{ setTimeout(r, 1500); }});
-        Object.assign(decisions, getInputs());
-    }}
-
-    // Brands reformulation
-    ui.menu.call(null, 'decisions', 'decisions/brands', {{}});
-    await new Promise(function(r) {{ setTimeout(r, 1500); }});
-    var reformTab = Array.from(document.querySelectorAll('a, button')).find(
-        function(el) {{ return el.textContent.trim() === 'Reformulation' && el.offsetParent !== null; }}
-    );
-    if (reformTab) {{
-        reformTab.click();
-        await new Promise(function(r) {{ setTimeout(r, 1000); }});
-        Object.assign(decisions, getInputs());
-    }}
-
-    return {{ period: period, reports: reports, decisions: decisions }};
+    return {{ period: period, reports: reports }};
 }}
 """
 
@@ -772,7 +395,7 @@ def flatten_scraped_data(
 ) -> dict[str, float | str | None]:
     """Flatten raw scraped period data into dot-notation keyed dict.
 
-    Takes the output of js_scrape_period_data() and produces a flat dict
+    Takes the output of js_scrape_period_reports() and produces a flat dict
     like {'performance_summary.stock_price': 28.33, ...}.
     """
     flat: dict[str, float | str | None] = {}
@@ -790,10 +413,6 @@ def flatten_scraped_data(
                         key = f"{section_name}.table{tidx}.row{ridx}.col{cidx}"
                         flat[key] = val
 
-    decisions = period_data.get("decisions", {})
-    for inp_name, inp_val in decisions.items():
-        flat[f"decisions.{inp_name}"] = inp_val
-
     return flat
 
 
@@ -802,14 +421,15 @@ def flatten_scraped_data(
 # ---------------------------------------------------------------------------
 
 def scrape_full_period_selenium(driver, period_index: int) -> dict:
-    """Scrape all data for a single period using Selenium.
+    """Scrape all report data for a single period using Selenium.
 
     Args:
         driver: Selenium WebDriver instance.
         period_index: 0=Start/Year0, 1=Year1, 2=Year2.
 
     Returns:
-        Dict with {period, reports, decisions} structure.
+        Dict with {period, reports} structure.
+        Decision inputs are NOT included; use decision_scraper.py for that.
     """
     import time
 
@@ -820,15 +440,15 @@ def scrape_full_period_selenium(driver, period_index: int) -> dict:
     """)
     time.sleep(2)
 
-    # Execute the comprehensive scraper
-    result = driver.execute_script(js_scrape_period_data())
+    # Execute the report scraper
+    result = driver.execute_script(js_scrape_period_reports())
     return result
 
 
 def scrape_all_periods_selenium(
     driver, periods: list[int] | None = None
 ) -> dict[int, dict]:
-    """Scrape all data for multiple periods using Selenium.
+    """Scrape all report data for multiple periods using Selenium.
 
     Args:
         driver: Selenium WebDriver instance.

@@ -139,15 +139,16 @@ Each line is one decision→outcome pair:
 
 ## src/
 
-- `pipeline.py` — Main entry point. Orchestrates scrape→parse→flatten→history. CLI: `--periods`, `--parse-only`
-- `scraper.py` — Selenium login + XLS download from PharmaSim portal (~25 reports/period)
-- `dom_scraper.py` — DOM-based scraper via JS eval. `DecisionInputMap` (63 fields), extracts editable decision inputs
-- `parser.py` — Parses XLS into 46 dataclasses. `YearData` aggregates all reports for one year
-- `decision.py` — `DecisionVector`: 25 controllable vars. `to_array`/`from_array` for optimizer
-- `flatten.py` — Nested `YearData` → flat dot-notation dict. `flatten_numeric_only()` for optimization
-- `run_store.py` — Run directory mgmt + JSONL history. `RunMetadata`, `create_run()`, `append_history()`
-- `decision_applier.py` — Validates suggestion JSON against constraints, generates JS to apply decisions page-by-page via MCP
-- `constraints.py` — All 59 decision variable constraints (bounds, types, sum groups). `validate_suggestion()`, `clamp_suggestion()`, `get_bounds()`
+- `pipeline.py` — End-to-end orchestrator: scrape→parse→flatten→history in one command. CLI: `--periods`, `--parse-only`
+- `scraper.py` — Unattended Selenium automation: login→launch sim→download all 25 XLS reports per period with human-like delays
+- `dom_scraper.py` — Live JS DOM scraper for report sections only (Company, Market, Consumer Survey): navigate report sections, extract tables without xlsx I/O. Does NOT scrape decision pages (see `decision_scraper.py`)
+- `parser.py` — Parse 25 xlsx reports into 46 structured dataclasses (PerformanceSummary, IncomeStatement, BrandFormulations, etc.), aggregate by year into `YearData`
+- `decision.py` — 25-field `DecisionVector`: extract from YearData reports (`from_year_data`), serialize to/from JSON/array for optimizer. Note: YearN data reflects Decision(N-1)
+- `flatten.py` — Recursively flatten nested `YearData` into ~200+ flat dot-notation keys. `flatten_numeric_only()` filters to floats for optimizer features
+- `run_store.py` — Filesystem management: create `run_NNN/` directories, write `metadata.json`, append (decision, outcomes) pairs to `history.jsonl`
+- `decision_applier.py` — Load suggestion JSON, validate against all constraints, generate per-page JS to apply decisions via Chrome DevTools MCP. Handles PharmaSim's unsaved-changes navigation blocking
+- `constraints.py` — 59 constraint definitions + validators: per-field bounds/types, sum groups (ad mix=100%), ordering (discounts monotonic), conditional irrelevance, equivalence groups, budget ceiling
+- `decision_scraper.py` — Comprehensive decision-page scraper: navigates ALL 7+ decision pages/tabs, extracts all editable inputs, Previous/Current/Change tables, budget bars, expenditures, formulation, reformulation, special page, and review summary. Consolidates `DecisionInputMap`, `INPUTS_BY_PERIOD`, and decision constants (`AD_AGENCIES`, `COMPARISON_TARGETS`, `COUPON_AMOUNTS`, `BENEFIT_LABELS`). Per-page and all-pages JS functions for Chrome DevTools MCP or Selenium
 
 ## Data
 
@@ -164,4 +165,10 @@ uv run python -m src.decision_applier FILE.json            # validate + generate
 uv run python -m src.decision_applier FILE.json --dry-run  # validate + print summary only
 uv run python -m src.decision_applier --generate-example 1 # generate template for period 1
 uv run python -m src.constraints                           # print all constraints
+uv run python -m src.decision_scraper --periods 1           # Selenium scrape of decision pages (default)
+uv run python -m src.decision_scraper --periods 0 1         # scrape decisions for multiple periods
+uv run python -m src.decision_scraper --output FILE         # scrape and save to custom path
+uv run python -m src.decision_scraper --js-only --periods 1 # generate JS (for manual copy-paste / MCP)
+uv run python -m src.decision_scraper --page sales_force --js-only  # JS for a single page
+uv run python -m src.decision_scraper --parse FILE.json     # pretty-print scraped decision data
 ```

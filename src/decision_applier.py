@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from src.constraints import CONSTRAINTS, SUM_GROUPS, validate_suggestion as _validate
-from src.dom_scraper import (
+from src.decision_scraper import (
     AD_AGENCIES,
     BENEFIT_LABELS,
     COMPARISON_TARGETS,
@@ -236,6 +236,49 @@ def dom_to_suggestion(dom_inputs: dict[str, Any]) -> dict[str, Any]:
             result[suggestion_key] = value
 
     return result
+
+
+def scraped_to_suggestion(scraped: dict[str, Any]) -> dict[str, Any]:
+    """Convert scraped decision JSON to an editable suggestion JSON.
+
+    Takes the output of decision_scraper (decisions_periodN.json) and produces
+    a flat suggestion dict that decision_applier can validate and apply.
+
+    Steps:
+      1. Flatten all page-level .inputs dicts into one HTML-keyed dict
+      2. Add brands.reformulation_choice as the "choice" key
+      3. Run dom_to_suggestion() for key renaming + type coercion
+      4. Add metadata (_period, _comment)
+
+    Args:
+        scraped: Dict from decision_scraper's js_scrape_all_decisions(),
+                 typically loaded from runs/decisions_periodN.json.
+
+    Returns:
+        Flat suggestion dict ready for editing, validation, and application.
+    """
+    # 1. Flatten all inputs into one HTML-keyed dict
+    flat_html: dict[str, Any] = {}
+    for page_key in ("sales_force", "pricing", "advertising", "promotion"):
+        page_data = scraped.get(page_key, {})
+        inputs = page_data.get("inputs", {})
+        flat_html.update(inputs)
+
+    # 2. Add reformulation choice (stored separately in brands)
+    brands = scraped.get("brands", {})
+    if brands.get("reformulation_available") and brands.get("reformulation_choice"):
+        flat_html["choice"] = brands["reformulation_choice"]
+
+    # 3. Convert HTML keys → suggestion keys with type coercion
+    suggestion = dom_to_suggestion(flat_html)
+
+    # 4. Add metadata
+    period = scraped.get("period")
+    if period is not None:
+        suggestion["_period"] = period
+        suggestion["_comment"] = f"Converted from scraped decisions for Period {period}"
+
+    return suggestion
 
 
 def load_suggestion(
@@ -743,6 +786,19 @@ def main():
         help="Generate an example suggestion file for the given period (0 or 1)",
     )
     parser.add_argument(
+        "--from-scraped",
+        type=str,
+        metavar="SCRAPED_JSON",
+        help="Convert a scraped decisions JSON (from decision_scraper) into "
+             "an editable suggestion JSON. Writes to suggestions/ directory.",
+    )
+    parser.add_argument(
+        "--output", "-o",
+        type=str,
+        default=None,
+        help="Output path for --from-scraped (default: suggestions/suggestionN.json)",
+    )
+    parser.add_argument(
         "--page-scripts",
         action="store_true",
         help="Output per-page JS scripts (for sequential MCP execution)",
@@ -754,8 +810,44 @@ def main():
         print(json.dumps(example, indent=2))
         return
 
+    if args.from_scraped:
+        with open(args.from_scraped) as f:
+            scraped = json.load(f)
+        suggestion = scraped_to_suggestion(scraped)
+
+        # Determine output path
+        if args.output:
+            out_path = Path(args.output)
+        else:
+            period = suggestion.get("_period", "X")
+            suggestions_dir = Path(__file__).parent.parent / "suggestions"
+            suggestions_dir.mkdir(parents=True, exist_ok=True)
+            out_path = suggestions_dir / f"suggestion{period}.json"
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_path, "w") as f:
+            json.dump(suggestion, f, indent=2)
+            f.write("\n")
+        print(f"Wrote suggestion to {out_path}")
+        print_suggestion_summary(suggestion)
+
+        # Validate
+        from src.constraints import validate_suggestion
+        errors = validate_suggestion(suggestion)
+        warnings = [e for e in errors if e.startswith("WARNING:")]
+        hard_errors = [e for e in errors if not e.startswith("WARNING:")]
+        for w in warnings:
+            print(w)
+        if hard_errors:
+            print(f"\n{len(hard_errors)} validation error(s):")
+            for e in hard_errors:
+                print(f"  {e}")
+        else:
+            print("\nValidation: PASSED (ready to apply)")
+        return
+
     if not args.suggestion_file:
-        parser.error("Please provide a suggestion file or use --generate-example")
+        parser.error("Please provide a suggestion file, --generate-example, or --from-scraped")
 
     suggestion = load_suggestion(args.suggestion_file)
     print_suggestion_summary(suggestion)
