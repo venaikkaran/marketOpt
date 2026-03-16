@@ -128,14 +128,37 @@ class DecisionVector:
             dv.sf_indirect_merchandisers = sf.indirect_merchandisers or 0.0
             dv.sf_indirect_detailers = sf.indirect_detailers or 0.0
 
-        # Promotion (use competitor-view promotions which has more data)
+        # Promotion data comes from two parsed sources:
+        # - promotion_reports: numeric fields for Allround's actual spending
+        # - promotions: competitor-view summary, where trial_size is a "Yes"/"" flag
         promo = yd.promotions.get("Allround")
-        if promo:
-            dv.promotional_allowance_pct = promo.promotional_allowance_pct or 0.0
-            dv.coop_advertising = promo.coop_advertising or 0.0
-            dv.point_of_purchase = promo.point_of_purchase or 0.0
-            dv.trial_size = float(promo.trial_size) if promo.trial_size else 0.0
-            dv.coupon_amount = promo.coupon_amount or 0.0
+        promo_report = yd.promotion_reports.get("Allround")
+        if promo or promo_report:
+            if promo and promo.promotional_allowance_pct is not None:
+                dv.promotional_allowance_pct = promo.promotional_allowance_pct
+            elif (
+                promo_report
+                and promo_report.promotional_allowance is not None
+            ):
+                dv.promotional_allowance_pct = promo_report.promotional_allowance
+
+            if promo_report and promo_report.coop_advertising is not None:
+                dv.coop_advertising = promo_report.coop_advertising
+            elif promo and promo.coop_advertising is not None:
+                dv.coop_advertising = promo.coop_advertising
+
+            if promo_report and promo_report.point_of_purchase is not None:
+                dv.point_of_purchase = promo_report.point_of_purchase
+            elif promo and promo.point_of_purchase is not None:
+                dv.point_of_purchase = promo.point_of_purchase
+
+            if promo_report and promo_report.trial_size is not None:
+                dv.trial_size = promo_report.trial_size
+
+            if promo and promo.coupon_amount is not None:
+                dv.coupon_amount = promo.coupon_amount
+            elif promo_report and promo_report.coupon_amount is not None:
+                dv.coupon_amount = promo_report.coupon_amount
 
         return dv
 
